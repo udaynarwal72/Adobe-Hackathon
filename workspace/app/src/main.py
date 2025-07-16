@@ -2,479 +2,553 @@ import fitz  # PyMuPDF
 import json
 import os
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import argparse
+from collections import defaultdict, Counter
 
-class PDFOutlineExtractor:
+class EnhancedPDFOutlineExtractor:
     def __init__(self):
+        # Comprehensive heading patterns
         self.heading_patterns = [
-            # Numbered patterns (most reliable)
-            r'^\s*(\d+)\.\s+(.+)$',  # 1. Title
-            r'^\s*(\d+)\.(\d+)\s+(.+)$',  # 1.1 Subtitle  
-            r'^\s*(\d+)\.(\d+)\.(\d+)\s+(.+)$',  # 1.1.1 Sub-subtitle
-            r'^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s+(.+)$',  # 1.1.1.1 Sub-sub-subtitle
+            # Primary numbered patterns
+            (r'^\s*(\d+)\.\s+(.+)$', "H1"),
+            (r'^\s*(\d+)\.(\d+)\s+(.+)$', "H2"),
+            (r'^\s*(\d+)\.(\d+)\.(\d+)\s+(.+)$', "H3"),
+            (r'^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s+(.+)$', "H4"),
+            
+            # Parenthetical numbering
+            (r'^\s*\((\d+)\)\s+(.+)$', "H2"),
+            (r'^\s*\(([a-z])\)\s+(.+)$', "H3"),
+            (r'^\s*\(([A-Z])\)\s+(.+)$', "H2"),
             
             # Chapter/Section patterns
-            r'^(?:Chapter|CHAPTER)\s+(\d+)[:\.\s]+(.+)$',
-            r'^(?:Section|SECTION)\s+(\d+)[:\.\s]+(.+)$',
-            r'^(?:Part|PART)\s+(\d+)[:\.\s]+(.+)$',
+            (r'^(?:Chapter|CHAPTER)\s+(\d+)[:\.\s]+(.+)$', "H1"),
+            (r'^(?:Section|SECTION)\s+(\d+)[:\.\s]+(.+)$', "H1"),
+            (r'^(?:Part|PART)\s+(\d+)[:\.\s]+(.+)$', "H1"),
             
             # Letter patterns
-            r'^\s*([A-Z])\.\s+(.+)$',  # A. Title
-            r'^\s*([a-z])\.\s+(.+)$',  # a. subtitle
+            (r'^\s*([A-Z])\.\s+(.+)$', "H1"),
+            (r'^\s*([a-z])\.\s+(.+)$', "H2"),
             
             # Roman numerals
-            r'^\s*([IVX]+)\.\s+(.+)$',  # I. Title, II. Title
-            r'^\s*([ivx]+)\.\s+(.+)$',  # i. subtitle
+            (r'^\s*([IVX]{1,5})\.\s+(.+)$', "H1"),
+            (r'^\s*([ivx]{1,5})\.\s+(.+)$', "H2"),
+            
+            # Bullet points
+            (r'^\s*[•·▪▫◦‣⁃]\s+(.+)$', "H3"),
+            (r'^\s*[-–—]\s+(.+)$', "H3"),
+            (r'^\s*[►▶]\s+(.+)$', "H3"),
+            
+            # Question patterns
+            (r'^\s*Q\.?\s*(\d+)[:\.]?\s+(.+)$', "H2"),
+            (r'^\s*Question\s*(\d*)[:\.]?\s+(.+)$', "H2"),
+            
+            # Form field patterns
+            (r'^\s*(.+?):\s*_+\s*$', "H3"),
+            (r'^\s*(.+?):\s*Rs\.?\s*_*\s*$', "H3"),
+            (r'^\s*(.+?):\s*₹\s*_*\s*$', "H3"),
+            (r'^\s*Date\s*(.*):\s*_*\s*$', "H3"),
+            (r'^\s*Signature\s*(.*):\s*_*\s*$', "H3"),
         ]
         
-        # Font size thresholds for different heading levels
-        self.font_size_thresholds = {
-            'title': 16,
-            'h1': 14,
-            'h2': 12,
-            'h3': 10
+        # Heading indicators
+        self.heading_indicators = {
+            'introduction', 'conclusion', 'summary', 'overview', 'background',
+            'application', 'form', 'details', 'information', 'declaration',
+            'advance', 'amount', 'required', 'employee', 'department',
+            'name', 'address', 'contact', 'phone', 'email', 'date', 'signature',
+            'approval', 'sanctioned', 'granted', 'requirements', 'guidelines',
+            'instructions', 'eligibility', 'criteria', 'conditions', 'terms'
         }
         
+        # Body text indicators
+        self.body_text_indicators = {
+            'the', 'and', 'or', 'but', 'if', 'when', 'where', 'how', 'why',
+            'this', 'that', 'these', 'those', 'with', 'from', 'into', 'during',
+            'please', 'kindly', 'hereby', 'therefore', 'however', 'moreover',
+            'should', 'would', 'could', 'might', 'will', 'shall', 'must',
+            'have', 'has', 'had', 'been', 'being', 'was', 'were', 'are', 'is'
+        }
+
     def extract_title(self, doc) -> str:
-        """Extract document title with enhanced accuracy and better cleaning"""
-        # Try metadata first with better validation
-        metadata = doc.metadata
-        if metadata and metadata.get('title'):
-            title = metadata['title'].strip()
-            # Clean up common metadata artifacts and validate
-            if (title and 
-                not title.lower().endswith('.pdf') and 
-                not title.lower().startswith('microsoft word') and
-                len(title) > 2 and
-                len(title) < 200):
-                # Clean the metadata title
-                title = re.sub(r'^Microsoft Word - ', '', title)  # Remove Word prefix
-                title = re.sub(r'\.docx?$', '', title)  # Remove doc extensions
-                title = title.strip()
-                if len(title) > 3:
-                    return title
-        
-        # Analyze first few pages more comprehensively for title
-        title_candidates = []
-        
-        for page_num in range(min(3, len(doc))):  # Check first 3 pages
-            page = doc[page_num]
-            text_dict = page.get_text("dict")
+        """Extract document title"""
+        try:
+            # Try metadata first
+            metadata = doc.metadata
+            if metadata and metadata.get('title'):
+                title = metadata['title'].strip()
+                if self._is_valid_title(title):
+                    return self._clean_title(title)
             
-            for block_idx, block in enumerate(text_dict["blocks"][:10]):  # Check first 10 blocks per page
-                if "lines" in block:
-                    for line_idx, line in enumerate(block["lines"]):
-                        line_text = ""
-                        max_size = 0
-                        is_bold = False
-                        is_centered = False
-                        
-                        for span in line["spans"]:
-                            line_text += span["text"]
-                            max_size = max(max_size, span["size"])
-                            if span["flags"] & 2**4:  # Bold flag
-                                is_bold = True
-                        
-                        line_text = line_text.strip()
-                        
-                        # Enhanced title criteria
-                        if (line_text and 
-                            len(line_text) > 3 and 
-                            len(line_text) < 200 and  # Not too long
-                            max_size >= 12):  # Reasonable font size
-                            
-                            # Skip obvious non-title content
-                            if (line_text.lower() in ['page', 'contents', 'table of contents', 'index'] or
-                                re.match(r'^\d+$', line_text) or  # Just page numbers
-                                re.match(r'^page\s+\d+', line_text.lower()) or
-                                len(line_text.split()) > 15):  # Too many words
-                                continue
-                            
-                            # Calculate score based on multiple factors
-                            score = 0
-                            
-                            # Size factor
-                            score += max_size * 2
-                            
-                            # Position factor (earlier is better)
-                            score += max(0, 50 - (page_num * 20 + block_idx * 5 + line_idx))
-                            
-                            # Formatting factor
-                            if is_bold:
-                                score += 15
-                            
-                            # Length factor (moderate length preferred)
-                            if 10 <= len(line_text) <= 80:
-                                score += 10
-                            elif 5 <= len(line_text) <= 150:
-                                score += 5
-                            
-                            # Content factor
-                            if (line_text.istitle() or 
-                                line_text.isupper() or 
-                                any(word.istitle() for word in line_text.split())):
-                                score += 10
-                            
-                            # Avoid obviously bad titles
-                            bad_indicators = ['overview', 'version', 'revision', 'history', 'acknowledgements']
-                            if any(indicator in line_text.lower() for indicator in bad_indicators):
-                                score -= 20
-                            
-                            title_candidates.append((score, line_text, max_size, page_num))
-        
-        # Sort by score and get the best candidate
-        if title_candidates:
-            title_candidates.sort(reverse=True, key=lambda x: x[0])
-            
-            # Get the best candidate but validate it
-            for score, best_title, size, page in title_candidates[:3]:  # Check top 3
-                # Clean up the title carefully
-                cleaned_title = best_title.strip()
+            # Analyze first page for title
+            if len(doc) > 0:
+                page = doc[0]
+                text_dict = page.get_text("dict")
                 
-                # Only remove numbered prefixes if they're clearly list items
-                if re.match(r'^\d+\.\s+', cleaned_title):
-                    cleaned_title = re.sub(r'^\d+\.\s+', '', cleaned_title)
+                title_candidates = []
                 
-                # Remove common artifacts but preserve content
-                cleaned_title = re.sub(r'^[^\w]*', '', cleaned_title)  # Leading non-word chars
-                cleaned_title = re.sub(r'\s+', ' ', cleaned_title)  # Multiple spaces
-                cleaned_title = cleaned_title.strip()
+                for block in text_dict.get("blocks", [])[:10]:  # Check first 10 blocks
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            line_text, max_size, formatting = self._extract_line_info(line)
+                            
+                            if line_text and self._could_be_title(line_text, max_size, formatting):
+                                score = self._calculate_title_score(line_text, max_size, formatting)
+                                title_candidates.append((score, line_text))
                 
-                # Final validation
-                if (cleaned_title and 
-                    len(cleaned_title) > 3 and
-                    not re.match(r'^\d+$', cleaned_title) and
-                    cleaned_title.lower() not in ['overview', 'introduction', 'contents']):
-                    return cleaned_title
-        
-        # Enhanced fallback: try to construct from filename or first meaningful text
-        first_page = doc[0]
-        text_dict = first_page.get_text("dict")
-        
-        # Look for any reasonable text as last resort
-        for block in text_dict["blocks"][:5]:
-            if "lines" in block:
-                for line in block["lines"]:
-                    for span in line["spans"]:
-                        text = span["text"].strip()
-                        if (text and 
-                            len(text) > 5 and 
-                            len(text) < 100 and
-                            not re.match(r'^\d+$', text)):
-                            return text
-        
-        return "Document"
-    
-    def analyze_text_formatting(self, doc) -> Dict[str, Any]:
-        """Analyze document formatting with improved statistical analysis"""
-        font_sizes = {}
-        font_flags = {}
-        text_blocks = []
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text_dict = page.get_text("dict")
+                if title_candidates:
+                    title_candidates.sort(reverse=True, key=lambda x: x[0])
+                    for score, title_text in title_candidates[:5]:
+                        cleaned = self._clean_title(title_text)
+                        if self._is_valid_title(cleaned):
+                            return cleaned
             
-            for block in text_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        for span in line["spans"]:
-                            size = round(span["size"], 1)  # Round to avoid floating point issues
-                            flags = span["flags"]
-                            text = span["text"].strip()
-                            
-                            if text and len(text) > 1:
-                                if size not in font_sizes:
-                                    font_sizes[size] = []
-                                font_sizes[size].append(text)
-                                
-                                if flags not in font_flags:
-                                    font_flags[flags] = []
-                                font_flags[flags].append(text)
-                                
-                                # Store for analysis
-                                text_blocks.append({
-                                    'text': text,
-                                    'size': size,
-                                    'flags': flags,
-                                    'page': page_num + 1
-                                })
-        
-        # Enhanced font size analysis
-        sorted_sizes = sorted(font_sizes.keys(), reverse=True)
-        
-        # Find most common font size (likely body text)
-        size_counts = {size: len(texts) for size, texts in font_sizes.items()}
-        body_text_size = max(size_counts.items(), key=lambda x: x[1])[0] if size_counts else 12
-        
-        # Calculate heading size thresholds based on document statistics
-        heading_sizes = [s for s in sorted_sizes if s > body_text_size]
-        
-        return {
-            'font_sizes': font_sizes,
-            'font_flags': font_flags,
-            'size_hierarchy': sorted_sizes,
-            'body_text_size': body_text_size,
-            'heading_sizes': heading_sizes,
-            'text_blocks': text_blocks
-        }
-    
-    def is_heading(self, text: str, size: float, flags: int, formatting_info: Dict) -> Optional[str]:
-        """Determine if text is a heading with improved accuracy and level detection"""
-        text = text.strip()
-        
-        if not text or len(text) < 2:
-            return None
-        
-        # Skip very long text (likely paragraphs)
-        if len(text) > 300:
-            return None
+            return "Document"
             
-        # Skip single characters or very short text unless it's clearly numbered
-        if len(text) <= 2 and not re.match(r'^\d+\.?\s*[A-Za-z]', text):
-            return None
-        
-        # Get document statistics
-        body_text_size = formatting_info.get('body_text_size', 12)
-        heading_sizes = formatting_info.get('heading_sizes', [])
-        
-        # Enhanced numbered pattern detection (most reliable)
-        numbered_patterns = [
-            (r'^\s*\d+\.\s+\w+', "H1"),  # 1. Introduction
-            (r'^\s*\d+\.\d+\s+\w+', "H2"),  # 1.1 Overview
-            (r'^\s*\d+\.\d+\.\d+\s+\w+', "H3"),  # 1.1.1 Details
-        ]
-        
-        for pattern, level in numbered_patterns:
-            if re.match(pattern, text):
-                return level
-        
-        # Chapter/Section patterns
-        if re.match(r'^\s*(?:Chapter|CHAPTER)\s+\d+', text):
-            return "H1"
-        elif re.match(r'^\s*(?:Section|SECTION)\s+\d+', text):
-            return "H2"
-        elif re.match(r'^\s*(?:Part|PART)\s+\d+', text):
-            return "H1"
-        
-        # Letter patterns (be more specific)
-        if re.match(r'^\s*[A-Z]\.\s+[A-Z]', text):  # A. Introduction
-            return "H1"
-        elif re.match(r'^\s*[a-z]\.\s+[a-z]', text):  # a. overview
-            return "H2"
-        
-        # Roman numeral patterns
-        if re.match(r'^\s*[IVX]{1,4}\.\s+\w+', text):
-            return "H1"
-        elif re.match(r'^\s*[ivx]{1,4}\.\s+\w+', text):
-            return "H2"
-        
-        # Font size and formatting based detection (improved thresholds)
-        is_bold = bool(flags & 2**4)
-        is_italic = bool(flags & 2**1)
-        
-        # Calculate relative size more accurately
-        size_ratio = size / body_text_size if body_text_size > 0 else 1
-        
-        # Skip if text looks like body text (common phrases that shouldn't be headings)
-        body_text_indicators = [
-            r'\b(?:this|that|the|and|or|but|if|when|where|how|why|what)\b',
-            r'\b(?:page|pages|figure|table|see|refer|according|however)\b',
-            r'[.!?]\s+[A-Z]',  # Contains sentence-ending punctuation followed by capital
-            r'\b(?:in|on|at|for|with|by|from|to|of|as)\s+\w+\s+\w+',  # Common prepositions with context
-        ]
-        
-        text_lower = text.lower()
-        for indicator in body_text_indicators:
-            if re.search(indicator, text_lower):
-                # Be more strict for potential body text
-                if not (is_bold and size_ratio >= 1.3):
-                    return None
-        
-        # Enhanced heading detection with better thresholds
-        if size_ratio >= 1.6 or size >= 16:  # Very large text
-            if is_bold or size_ratio >= 2.0:
-                return "H1"
-            elif len(text.split()) <= 8:  # Short enough to be a heading
-                return "H1"
-        elif size_ratio >= 1.3 or size >= 14:  # Large text
-            if is_bold:
-                return "H1"
-            elif len(text.split()) <= 6:
-                return "H2"
-        elif size_ratio >= 1.15 or size >= 12:  # Medium-large text
-            if is_bold and len(text.split()) <= 8:
-                return "H2"
-            elif is_bold and len(text.split()) <= 5:
-                return "H1"
-        elif size_ratio >= 1.05 or size >= 11:  # Slightly larger text
-            if is_bold and len(text.split()) <= 6:
-                return "H3"
-        
-        # All caps detection (more restrictive)
-        if (text.isupper() and 
-            3 <= len(text) <= 80 and 
-            len(text.split()) <= 8 and
-            size_ratio >= 1.1):
-            if size_ratio >= 1.4:
-                return "H1"
-            elif size_ratio >= 1.2:
-                return "H2"
-            else:
-                return "H3"
-        
-        # Title case detection (be more selective)
-        if (text.istitle() and 
-            len(text.split()) <= 8 and 
-            len(text) <= 100 and
-            not text.endswith('.') and 
-            is_bold and
-            size_ratio >= 1.2):
-            if size_ratio >= 1.4:
-                return "H1"
-            elif size_ratio >= 1.25:
-                return "H2"
-            else:
-                return "H3"
-        
-        return None
-    
-    def extract_headings(self, doc) -> List[Dict[str, Any]]:
-        """Extract headings with improved accuracy and proper text preservation"""
-        formatting_info = self.analyze_text_formatting(doc)
-        headings = []
-        seen_text_per_page = {}  # Track text per page to avoid duplicates
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text_dict = page.get_text("dict")
+        except Exception as e:
+            print(f"Error extracting title: {e}")
+            return "Document"
+
+    def _extract_line_info(self, line) -> Tuple[str, float, Dict]:
+        """Extract information from a text line"""
+        try:
+            line_text = ""
+            max_size = 0
+            flags = 0
             
-            if page_num not in seen_text_per_page:
-                seen_text_per_page[page_num] = set()
+            for span in line.get("spans", []):
+                line_text += span.get("text", "")
+                max_size = max(max_size, span.get("size", 12))
+                flags |= span.get("flags", 0)
             
-            for block in text_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        line_text = ""
-                        line_size = 0
-                        line_flags = 0
-                        
-                        # Combine spans in the line
-                        for span in line["spans"]:
-                            line_text += span["text"]
-                            line_size = max(line_size, span["size"])
-                            line_flags |= span["flags"]
-                        
-                        line_text = line_text.strip()
-                        
-                        if line_text and len(line_text) >= 2:
-                            # Avoid processing the same text multiple times on the same page
-                            text_key = line_text.lower()
-                            if text_key in seen_text_per_page[page_num]:
-                                continue
-                            seen_text_per_page[page_num].add(text_key)
-                            
-                            heading_level = self.is_heading(line_text, line_size, line_flags, formatting_info)
-                            if heading_level:
-                                # IMPROVED: More careful text cleaning that preserves actual content
-                                clean_text = line_text.strip()
-                                
-                                # Only remove SPECIFIC numbered patterns, not any leading characters
-                                # Remove numbered list patterns like "1. ", "1.1 ", "1.1.1 "
-                                clean_text = re.sub(r'^\s*\d+(\.\d+)*\.?\s+', '', clean_text)
-                                
-                                # Remove chapter/section patterns more carefully
-                                clean_text = re.sub(r'^(?:Chapter|CHAPTER)\s+\d+[:\.\s]+', '', clean_text)
-                                clean_text = re.sub(r'^(?:Section|SECTION)\s+\d+[:\.\s]+', '', clean_text)
-                                clean_text = re.sub(r'^(?:Part|PART)\s+\d+[:\.\s]+', '', clean_text)
-                                
-                                # Remove letter patterns like "A. ", "a. " but be more specific
-                                clean_text = re.sub(r'^\s*[A-Z]\.?\s+(?=[A-Z])', '', clean_text)  # Only if followed by uppercase
-                                clean_text = re.sub(r'^\s*[a-z]\.?\s+(?=[a-z])', '', clean_text)  # Only if followed by lowercase
-                                
-                                # Remove roman numeral patterns more carefully
-                                clean_text = re.sub(r'^\s*[IVX]{1,4}\.?\s+', '', clean_text)
-                                clean_text = re.sub(r'^\s*[ivx]{1,4}\.?\s+', '', clean_text)
-                                
-                                # Clean up spacing but preserve the actual content
-                                clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-                                
-                                # Only add if text is meaningful and not just artifacts
-                                if (clean_text and 
-                                    len(clean_text) >= 2 and 
-                                    not re.match(r'^\d+$', clean_text) and  # Not just numbers
-                                    clean_text.lower() not in ['page', 'figure', 'table', 'contents', 'index']):
-                                    
-                                    headings.append({
-                                        "level": heading_level,
-                                        "text": clean_text,
-                                        "page": page_num + 1
-                                    })
-        
-        # Enhanced deduplication while preserving order and page info
-        unique_headings = []
-        seen_combinations = set()
-        
-        for heading in headings:
-            # Create a key that considers level and normalized text
-            normalized_text = re.sub(r'\s+', ' ', heading['text'].lower().strip())
-            heading_key = (heading['level'], normalized_text)
+            formatting = {
+                'max_size': max_size,
+                'is_bold': bool(flags & 2**4),
+                'is_italic': bool(flags & 2**1),
+                'is_underline': bool(flags & 2**0)
+            }
             
-            # Also check for very similar headings (avoid near-duplicates)
-            is_duplicate = False
-            for existing_key in seen_combinations:
-                if (existing_key[0] == heading['level'] and 
-                    self._texts_are_similar(existing_key[1], normalized_text)):
-                    is_duplicate = True
-                    break
+            return line_text.strip(), max_size, formatting
             
-            if not is_duplicate:
-                seen_combinations.add(heading_key)
-                unique_headings.append(heading)
-        
-        return unique_headings
-    
-    def _texts_are_similar(self, text1: str, text2: str, threshold: float = 0.8) -> bool:
-        """Check if two texts are similar enough to be considered duplicates"""
-        if text1 == text2:
-            return True
-        
-        # Simple similarity check based on common words
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        
-        if not words1 or not words2:
+        except Exception as e:
+            print(f"Error extracting line info: {e}")
+            return "", 12, {'max_size': 12, 'is_bold': False, 'is_italic': False, 'is_underline': False}
+
+    def _could_be_title(self, text: str, size: float, formatting: Dict) -> bool:
+        """Check if text could be a title"""
+        if not text or len(text) < 2 or len(text) > 200:
             return False
         
-        common_words = words1.intersection(words2)
-        total_words = words1.union(words2)
+        # Skip obvious non-titles
+        skip_patterns = [
+            r'^\d+$',
+            r'^page\s+\d+',
+            r'^\d{1,2}/\d{1,2}/\d{2,4}',
+            r'^[^\w]*$'
+        ]
         
-        similarity = len(common_words) / len(total_words)
-        return similarity >= threshold
-    
-    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
-        """Process a single PDF file with enhanced accuracy"""
+        for pattern in skip_patterns:
+            if re.match(pattern, text.lower()):
+                return False
+        
+        return True
+
+    def _calculate_title_score(self, text: str, size: float, formatting: Dict) -> float:
+        """Calculate title score"""
+        score = 0
+        
+        # Size factor
+        score += size * 3
+        
+        # Formatting factors
+        if formatting.get('is_bold', False):
+            score += 30
+        if formatting.get('is_underline', False):
+            score += 20
+        if formatting.get('is_italic', False):
+            score += 10
+        
+        # Length factors
+        word_count = len(text.split())
+        if 2 <= word_count <= 10:
+            score += 25
+        elif word_count <= 20:
+            score += 15
+        
+        # Content factors
+        if text.istitle() or text.isupper():
+            score += 20
+        
+        # Title-like words
+        text_lower = text.lower()
+        title_words = {'application', 'form', 'report', 'document', 'manual'}
+        if any(word in text_lower for word in title_words):
+            score += 25
+        
+        return score
+
+    def _clean_title(self, title: str) -> str:
+        """Clean title text"""
+        # Remove common prefixes/suffixes
+        title = re.sub(r'^Microsoft Word - ', '', title)
+        title = re.sub(r'\.docx?$', '', title, flags=re.IGNORECASE)
+        title = re.sub(r'\.pdf$', '', title, flags=re.IGNORECASE)
+        
+        # Clean up spacing
+        title = re.sub(r'\s+', ' ', title).strip()
+        
+        return title
+
+    def _is_valid_title(self, title: str) -> bool:
+        """Validate title"""
+        if not title or len(title) < 2 or len(title) > 200:
+            return False
+        
+        invalid_titles = {
+            'document', 'untitled', 'page', 'contents', 'index'
+        }
+        
+        return title.lower() not in invalid_titles
+
+    def analyze_document_structure(self, doc) -> Dict[str, Any]:
+        """Analyze document structure"""
         try:
+            size_analysis = defaultdict(int)
+            formatting_analysis = defaultdict(int)
+            
+            for page_num in range(min(len(doc), 5)):  # Analyze first 5 pages
+                page = doc[page_num]
+                text_dict = page.get_text("dict")
+                
+                for block in text_dict.get("blocks", []):
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            line_text, max_size, formatting = self._extract_line_info(line)
+                            
+                            if line_text and len(line_text.strip()) > 0:
+                                size_analysis[round(max_size, 1)] += len(line_text)
+                                formatting_key = (formatting['is_bold'], formatting['is_italic'])
+                                formatting_analysis[formatting_key] += 1
+            
+            # Determine body text size
+            if size_analysis:
+                body_size = max(size_analysis.items(), key=lambda x: x[1])[0]
+                sizes = list(size_analysis.keys())
+                sizes.sort(reverse=True)
+                heading_sizes = [s for s in sizes if s > body_size * 1.1]
+            else:
+                body_size = 12
+                heading_sizes = [14, 16, 18]
+            
+            return {
+                'body_text_size': body_size,
+                'heading_sizes': heading_sizes,
+                'size_distribution': dict(size_analysis),
+                'formatting_distribution': dict(formatting_analysis)
+            }
+            
+        except Exception as e:
+            print(f"Error analyzing document structure: {e}")
+            return {
+                'body_text_size': 12,
+                'heading_sizes': [14, 16, 18],
+                'size_distribution': {},
+                'formatting_distribution': {}
+            }
+
+    def is_heading_advanced(self, text: str, formatting: Dict, structure_info: Dict) -> Optional[str]:
+        """Advanced heading detection"""
+        try:
+            text = text.strip()
+            
+            if not text or len(text) < 1:
+                return None
+            
+            # Skip very long text
+            if len(text) > 500:
+                return None
+            
+            # Pattern-based detection first
+            for pattern, level in self.heading_patterns:
+                if re.match(pattern, text, re.IGNORECASE):
+                    return level
+            
+            # Skip obvious body text
+            if self._is_likely_body_text(text):
+                return None
+            
+            # Advanced analysis
+            body_size = structure_info.get('body_text_size', 12)
+            size = formatting.get('max_size', 12)
+            size_ratio = size / body_size if body_size > 0 else 1
+            
+            is_bold = formatting.get('is_bold', False)
+            is_italic = formatting.get('is_italic', False)
+            is_underline = formatting.get('is_underline', False)
+            
+            word_count = len(text.split())
+            
+            # Calculate heading score
+            heading_score = 0
+            
+            # Size factor
+            if size_ratio >= 2.0:
+                heading_score += 40
+            elif size_ratio >= 1.5:
+                heading_score += 30
+            elif size_ratio >= 1.3:
+                heading_score += 25
+            elif size_ratio >= 1.2:
+                heading_score += 20
+            elif size_ratio >= 1.1:
+                heading_score += 15
+            elif size_ratio >= 1.05:
+                heading_score += 10
+            
+            # Formatting factors
+            if is_bold:
+                heading_score += 25
+            if is_underline:
+                heading_score += 15
+            if is_italic:
+                heading_score += 5
+            
+            # Length factors
+            if word_count == 1:
+                heading_score += 20
+            elif word_count <= 3:
+                heading_score += 25
+            elif word_count <= 8:
+                heading_score += 20
+            elif word_count <= 15:
+                heading_score += 15
+            elif word_count <= 25:
+                heading_score += 10
+            elif word_count > 30:
+                heading_score -= 20
+            
+            # Content analysis
+            text_lower = text.lower()
+            
+            # Heading indicators
+            if any(indicator in text_lower for indicator in self.heading_indicators):
+                heading_score += 20
+            
+            # Case patterns
+            if text.isupper() and len(text) > 1:
+                heading_score += 20
+            elif text.istitle():
+                heading_score += 15
+            
+            # Punctuation patterns
+            if text.endswith(':'):
+                heading_score += 15
+            elif text.endswith('.') and word_count <= 5:
+                heading_score += 10
+            
+            # Form field patterns
+            if ':' in text and ('_' in text or text.endswith(':')):
+                heading_score += 20
+            
+            # Determine level based on score and size
+            if heading_score >= 50:
+                if size_ratio >= 2.0:
+                    return "H1"
+                elif size_ratio >= 1.5:
+                    return "H1"
+                else:
+                    return "H2"
+            elif heading_score >= 35:
+                if size_ratio >= 1.5:
+                    return "H1"
+                elif size_ratio >= 1.2:
+                    return "H2"
+                else:
+                    return "H2"
+            elif heading_score >= 25:
+                if size_ratio >= 1.3:
+                    return "H2"
+                else:
+                    return "H3"
+            elif heading_score >= 15:
+                return "H3"
+            elif heading_score >= 10:
+                return "H4"
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error in heading detection: {e}")
+            return None
+
+    def _is_likely_body_text(self, text: str) -> bool:
+        """Check if text is likely body text"""
+        try:
+            text_lower = text.lower()
+            
+            # Common body text patterns
+            body_patterns = [
+                r'\b(?:this|that|the|and|or|but|if|when|where|how|why|what)\b.*\b(?:is|are|was|were|will|would|should|could)\b',
+                r'\b(?:please|kindly|hereby|therefore|however|moreover)\b',
+                r'[.!?]\s+[A-Z]',  # Multiple sentences
+            ]
+            
+            for pattern in body_patterns:
+                if re.search(pattern, text_lower):
+                    return True
+            
+            # Check for high concentration of body text indicators
+            words = text_lower.split()
+            if len(words) > 5:
+                body_word_count = sum(1 for word in words if word in self.body_text_indicators)
+                if body_word_count / len(words) > 0.3:
+                    return True
+            
+            # Skip very long sentences
+            if len(words) > 25 and '.' in text:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error checking body text: {e}")
+            return False
+
+    def extract_all_headings(self, doc) -> List[Dict[str, Any]]:
+        """Extract all headings"""
+        try:
+            structure_info = self.analyze_document_structure(doc)
+            headings = []
+            processed_text = set()
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text_dict = page.get_text("dict")
+                
+                for block in text_dict.get("blocks", []):
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            line_text, max_size, formatting = self._extract_line_info(line)
+                            
+                            if line_text and len(line_text) >= 1:
+                                # Avoid duplicates
+                                text_id = (line_text.lower().strip(), page_num)
+                                if text_id in processed_text:
+                                    continue
+                                processed_text.add(text_id)
+                                
+                                heading_level = self.is_heading_advanced(line_text, formatting, structure_info)
+                                
+                                if heading_level:
+                                    clean_text = self._clean_heading_text(line_text)
+                                    
+                                    if self._is_valid_heading(clean_text):
+                                        headings.append({
+                                            "level": heading_level,
+                                            "text": clean_text,
+                                            "page": page_num + 1
+                                        })
+            
+            return self._refine_headings(headings)
+            
+        except Exception as e:
+            print(f"Error extracting headings: {e}")
+            return []
+
+    def _clean_heading_text(self, text: str) -> str:
+        """Clean heading text"""
+        try:
+            original_text = text.strip()
+            
+            # Remove numbered patterns
+            patterns_to_remove = [
+                r'^\s*\d+(\.\d+)*\.?\s+',
+                r'^\s*\(\d+\)\s+',
+                r'^\s*\([a-zA-Z]\)\s+',
+                r'^\s*[A-Z]\.?\s+(?=[A-Z])',
+                r'^\s*[a-z]\.?\s+(?=[a-z])',
+                r'^\s*[IVX]{1,5}\.?\s+',
+                r'^\s*[ivx]{1,5}\.?\s+',
+                r'^\s*[•·▪▫◦‣⁃►▶-–—]\s+',
+                r'^\s*Q\.?\s*\d*[:\.]?\s+',
+                r'^\s*Question\s*\d*[:\.]?\s+',
+            ]
+            
+            cleaned = original_text
+            for pattern in patterns_to_remove:
+                cleaned = re.sub(pattern, '', cleaned)
+            
+            # Clean up spacing
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            
+            # If cleaning removed too much, return original
+            if len(cleaned) < len(original_text) * 0.2:
+                return original_text
+            
+            return cleaned if cleaned else original_text
+            
+        except Exception as e:
+            print(f"Error cleaning heading text: {e}")
+            return text
+
+    def _is_valid_heading(self, text: str) -> bool:
+        """Validate heading"""
+        if not text or len(text) < 1:
+            return False
+        
+        # Skip pure numbers or symbols
+        if re.match(r'^[\d\s\.\-_]+$', text) and len(text) > 3:
+            return False
+        
+        return True
+
+    def _refine_headings(self, headings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Refine headings"""
+        try:
+            if not headings:
+                return headings
+            
+            # Sort by page and text
+            headings.sort(key=lambda x: (x['page'], x['text']))
+            
+            # Remove exact duplicates
+            refined = []
+            seen_texts = set()
+            
+            for heading in headings:
+                text_key = heading['text'].lower().strip()
+                
+                if text_key not in seen_texts:
+                    seen_texts.add(text_key)
+                    refined.append(heading)
+            
+            return refined
+            
+        except Exception as e:
+            print(f"Error refining headings: {e}")
+            return headings
+
+    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
+        """Process PDF"""
+        try:
+            print(f"Opening PDF: {pdf_path}")
             doc = fitz.open(pdf_path)
             
-            # Extract title with improved method
+            # Extract title
+            print("Extracting title...")
             title = self.extract_title(doc)
             
-            # Extract headings with enhanced detection
-            headings = self.extract_headings(doc)
-            
-            # Sort headings by page number, then by appearance order
-            headings.sort(key=lambda x: x['page'])
-            
-            # Post-process to ensure logical hierarchy
-            processed_headings = self._post_process_headings(headings)
+            # Extract headings
+            print("Extracting headings...")
+            headings = self.extract_all_headings(doc)
             
             doc.close()
             
+            print(f"Extracted {len(headings)} headings")
+            
             return {
                 "title": title,
-                "outline": processed_headings
+                "outline": headings
             }
             
         except Exception as e:
@@ -483,55 +557,70 @@ class PDFOutlineExtractor:
                 "title": "Error",
                 "outline": []
             }
-    
-    def _post_process_headings(self, headings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Post-process headings to ensure logical hierarchy and remove noise"""
-        if not headings:
-            return headings
-        
-        processed = []
-        
-        for heading in headings:
-            # Skip very short headings that might be noise
-            if len(heading['text']) < 2:
-                continue
-                
-            # Skip headings that look like page numbers or references
-            if re.match(r'^\d+$', heading['text'].strip()):
-                continue
-                
-            # Skip common PDF artifacts
-            if heading['text'].lower() in ['page', 'figure', 'table', 'contents', 'index']:
-                continue
-            
-            processed.append(heading)
-        
-        return processed
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract PDF outline')
-    parser.add_argument('--input', default='/app/input', help='Input directory')
-    parser.add_argument('--output', default='/app/output', help='Output directory')
+    parser = argparse.ArgumentParser(description='Enhanced PDF outline extraction')
+    parser.add_argument('--input', required=True, help='Input directory containing PDF files')
+    parser.add_argument('--output', required=True, help='Output directory for JSON files')
+    parser.add_argument('--verbose', action='store_true', help='Verbose output')
     args = parser.parse_args()
     
-    extractor = PDFOutlineExtractor()
+    # Convert to absolute paths
+    input_dir = os.path.abspath(args.input)
+    output_dir = os.path.abspath(args.output)
     
-    # Ensure output directory exists
-    os.makedirs(args.output, exist_ok=True)
+    print(f"Input directory: {input_dir}")
+    print(f"Output directory: {output_dir}")
     
-    # Process all PDF files in input directory
-    for filename in os.listdir(args.input):
+    # Check input directory
+    if not os.path.exists(input_dir):
+        print(f"Error: Input directory '{input_dir}' does not exist!")
+        return
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    extractor = EnhancedPDFOutlineExtractor()
+    
+    # Find PDF files
+    pdf_files = []
+    for filename in os.listdir(input_dir):
         if filename.lower().endswith('.pdf'):
-            pdf_path = os.path.join(args.input, filename)
-            output_path = os.path.join(args.output, filename.replace('.pdf', '.json'))
-            
-            print(f"Processing {filename}...")
-            result = extractor.process_pdf(pdf_path)
-            
+            pdf_files.append(filename)
+    
+    if not pdf_files:
+        print(f"No PDF files found in '{input_dir}'")
+        return
+    
+    print(f"Found {len(pdf_files)} PDF files to process")
+    
+    # Process each PDF
+    for filename in pdf_files:
+        pdf_path = os.path.join(input_dir, filename)
+        output_filename = filename.replace('.pdf', '.json')
+        output_path = os.path.join(output_dir, output_filename)
+        
+        print(f"\nProcessing: {filename}")
+        
+        result = extractor.process_pdf(pdf_path)
+        
+        if args.verbose:
+            print(f"Title: {result['title']}")
+            print(f"Found {len(result['outline'])} headings:")
+            for i, heading in enumerate(result['outline'][:10]):
+                print(f"  {i+1:2d}. {heading['level']}: {heading['text']} (page {heading['page']})")
+            if len(result['outline']) > 10:
+                print(f"  ... and {len(result['outline']) - 10} more")
+        
+        # Save result
+        try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)
-            
-            print(f"Saved outline to {output_path}")
+            print(f"✓ Saved outline to: {output_path}")
+        except Exception as e:
+            print(f"✗ Error saving {output_path}: {e}")
+    
+    print(f"\nProcessing complete! Processed {len(pdf_files)} files.")
 
 if __name__ == "__main__":
     main()

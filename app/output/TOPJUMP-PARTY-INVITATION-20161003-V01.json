@@ -1,60 +1,10 @@
 {
-  "title": "TOPJUMP - PARTY INVITATION 20161003 V01.cdr",
-  "outline": [
-    {
-      "level": "H2",
-      "text": "(NEAR DIXIE STAMPEDE ON THE PARKWAY)",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "3735 PARKWAY",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "ADDRESS:",
-      "page": 1
-    },
-    {
-      "level": "H2",
-      "text": "CLOSED TOED SHOES ARE REQUIRED FOR CLIMBING",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "HOPE To SEE You THERE!",
-      "page": 1
-    },
-    {
-      "level": "H2",
-      "text": "PARENTS OR GUARDIANS NOT ATTENDING THE PARTY,",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "PIGEON FORGE, TN 37863",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "RSVP: ----------------",
-      "page": 1
-    },
-    {
-      "level": "H2",
-      "text": "SO YOUR CHILD CAN ATTEND.",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "TOPJUMP",
-      "page": 1
-    },
-    {
-      "level": "H1",
-      "text": "WWW.TOPJUMP.COM",
-      "page": 1
-    }
-  ]
+  "title": "TOPJUMP-PARTY-INVITATION-20161003-V01",
+  "outline": [],
+  "metadata": {
+    "total_text_elements": 24,
+    "total_headings": 0,
+    "model_used": "Challenge-1(a) trained ensemble",
+    "heading_distribution": {}
+  }
 }

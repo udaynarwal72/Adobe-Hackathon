@@ -1,0 +1,13 @@
+{
+  "training_samples": 1207,
+  "rf_accuracy": 0.9338842975206612,
+  "dl_accuracy": 0.93388432264328,
+  "label_classes": [
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "TEXT"
+  ],
+  "feature_dimensions": 1009
+}

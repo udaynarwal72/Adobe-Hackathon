@@ -1,0 +1,18 @@
+{
+    "python.defaultInterpreterPath": "/Users/udaynarwal/Projects/Adobe Hackathon/venv/bin/python",
+    "python.pythonPath": "/Users/udaynarwal/Projects/Adobe Hackathon/venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.analysis.extraPaths": [
+        "/Users/udaynarwal/Projects/Adobe Hackathon/venv/lib/python3.13/site-packages"
+    ],
+    "python.autoComplete.extraPaths": [
+        "/Users/udaynarwal/Projects/Adobe Hackathon/venv/lib/python3.13/site-packages"
+    ],
+    "python.envFile": "${workspaceFolder}/.vscode/python.env",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.flake8Enabled": true,
+    "python.formatting.provider": "black",
+    "python.analysis.typeCheckingMode": "basic"
+}

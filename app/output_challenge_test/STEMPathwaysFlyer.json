@@ -1,0 +1,23 @@
+{
+  "title": "STEMPathwaysFlyer",
+  "outline": [
+    {
+      "level": "H1",
+      "text": "Parsippany -Troy Hills STEM Pathways",
+      "page": 1,
+      "confidence": {
+        "rf_prediction": "TEXT",
+        "dl_prediction": "H1",
+        "final_prediction": "H1"
+      }
+    }
+  ],
+  "metadata": {
+    "total_text_elements": 184,
+    "total_headings": 1,
+    "model_used": "Challenge-1(a) trained ensemble",
+    "heading_distribution": {
+      "H1": 1
+    }
+  }
+}
